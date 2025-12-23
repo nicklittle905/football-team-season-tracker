@@ -24,6 +24,7 @@ st.set_page_config(page_title="Season Tracker", layout="wide")
 session_defaults = {
     "selected_team_id": DEFAULT_TEAM_ID,
     "selected_team_name": DEFAULT_TEAM_NAME,
+    "selected_team_crest_url": None,
     "refreshing": False,
     "refresh_result": None,
     "last_refreshed_team_id": None,
@@ -37,11 +38,16 @@ for key, value in session_defaults.items():
 
 
 def cache_key() -> int:
-    return int(st.session_state.get("cache_buster", 0))
+    mtime = 0
+    try:
+        mtime = int(DB_PATH.stat().st_mtime)
+    except OSError:
+        mtime = 0
+    return (int(st.session_state.get("cache_buster", 0)), mtime)
 
 
 @st.cache_data(show_spinner=False)
-def query_df(sql: str, params: Optional[List[Any]], cache_seed: int) -> pd.DataFrame:
+def query_df(sql: str, params: Optional[List[Any]], cache_seed: Any) -> pd.DataFrame:
     if not DB_PATH.exists():
         return pd.DataFrame()
     try:
@@ -56,10 +62,28 @@ def invalidate_cache() -> None:
 
 
 def fetch_teams() -> List[Tuple[int, str]]:
-    for table in ("stg_raw_teams", "raw_teams"):
-        df = query_df(f"select team_id, team_name from {table} order by team_name", None, cache_key())
-        if not df.empty:
-            return [(int(r.team_id), str(r.team_name)) for _, r in df.iterrows()]
+    # Try staged first, then raw with proper aliases.
+    staged = query_df(
+        "select team_id, team_name, team_crest_url from stg_raw_teams order by team_name",
+        None,
+        cache_key(),
+    )
+    if not staged.empty:
+        return [
+            {"team_id": int(r.team_id), "team_name": str(r.team_name), "team_crest_url": r.team_crest_url}
+            for _, r in staged.iterrows()
+        ]
+
+    raw = query_df(
+        "select team_id, name as team_name, coalesce(crest_url, crest) as team_crest_url from raw_teams order by name",
+        None,
+        cache_key(),
+    )
+    if not raw.empty:
+        return [
+            {"team_id": int(r.team_id), "team_name": str(r.team_name), "team_crest_url": r.team_crest_url}
+            for _, r in raw.iterrows()
+        ]
     return []
 
 
@@ -85,21 +109,26 @@ with st.sidebar:
     teams = fetch_teams()
     selected_team_id = st.session_state["selected_team_id"]
     selected_team_name = st.session_state["selected_team_name"]
+    selected_team_crest_url = st.session_state.get("selected_team_crest_url")
 
     if teams:
         options = teams
         try:
-            idx = next(i for i, t in enumerate(options) if t[0] == selected_team_id)
+            idx = next(i for i, t in enumerate(options) if t["team_id"] == selected_team_id)
         except StopIteration:
             idx = 0
-        selected_team_id, selected_team_name = st.selectbox(
+        selected = st.selectbox(
             "Team",
             options=options,
             index=idx,
-            format_func=lambda opt: opt[1],
+            format_func=lambda opt: opt["team_name"],
         )
+        selected_team_id = selected["team_id"]
+        selected_team_name = selected["team_name"]
+        selected_team_crest_url = selected.get("team_crest_url")
         st.session_state["selected_team_id"] = selected_team_id
         st.session_state["selected_team_name"] = selected_team_name
+        st.session_state["selected_team_crest_url"] = selected_team_crest_url
     else:
         st.warning("No teams loaded yet.")
 
@@ -166,18 +195,23 @@ team_matches = query_df("select * from mart_team_last_5 order by match_date desc
 # -----------------------------------------------------------------------------
 # Header
 # -----------------------------------------------------------------------------
-st.markdown(
-    f"""
-    <div style="display:flex;justify-content:space-between;align-items:flex-end;padding:8px 4px 0;">
-      <div>
-        <div style="color:#94a3b8;font-size:0.9rem;">{COMP_CODE} · {SEASON}</div>
-        <div style="font-size:2rem;font-weight:800;">{selected_team_name}</div>
-      </div>
-      <div style="color:#94a3b8;font-size:0.9rem;">Team ID: {selected_team_id}</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+header_col1, header_col2 = st.columns([5, 1])
+with header_col1:
+    row = st.columns([1, 6])
+    with row[0]:
+        if selected_team_crest_url:
+            st.image(selected_team_crest_url, width=56)
+    with row[1]:
+        st.markdown(f"<div style='color:#94a3b8;font-size:0.9rem;'>{COMP_CODE} · {SEASON}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size:2rem;font-weight:800;'>{selected_team_name}</div>", unsafe_allow_html=True)
+with header_col2:
+    st.caption(f"Team ID: {selected_team_id}")
+
+# Attempt to backfill crest from league table if missing
+if not league_table.empty and not st.session_state.get("selected_team_crest_url"):
+    row = league_table[league_table["team_id"] == selected_team_id].head(1)
+    if not row.empty:
+        st.session_state["selected_team_crest_url"] = row.iloc[0].get("team_crest_url")
 
 # -----------------------------------------------------------------------------
 # Tabs

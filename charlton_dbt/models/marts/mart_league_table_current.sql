@@ -13,6 +13,7 @@ select
   s.team_id,
   s.position,
   t.team_name,
+  t.team_crest_url,
   s.played, s.won, s.drawn, s.lost,
   s.gf, s.ga, s.gd,
   s.points,

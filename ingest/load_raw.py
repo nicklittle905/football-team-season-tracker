@@ -47,9 +47,17 @@ def ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
         short_name VARCHAR,
         tla VARCHAR,
         crest VARCHAR,
+        crest_url VARCHAR,
         fetched_at_utc TIMESTAMP
     );
     """)
+
+    # Backfill new column if it was missing in an existing DB.
+    try:
+        con.execute("ALTER TABLE raw_teams ADD COLUMN crest_url VARCHAR;")
+    except Exception:
+        # Column likely exists; ignore.
+        pass
 
     con.execute("""
     CREATE TABLE IF NOT EXISTS raw_matches (
@@ -87,12 +95,14 @@ def upsert_teams(con: duckdb.DuckDBPyConnection, teams_payload: dict) -> int:
 
     rows = []
     for t in teams:
+        crest_url = t.get("crest") or t.get("crestUrl")
         rows.append((
             int(t["id"]),
             t.get("name"),
             t.get("shortName"),
             t.get("tla"),
             t.get("crest"),
+            crest_url,
             fetched_at,
         ))
 
@@ -100,13 +110,14 @@ def upsert_teams(con: duckdb.DuckDBPyConnection, teams_payload: dict) -> int:
         return 0
 
     con.executemany("""
-        INSERT INTO raw_teams (team_id, name, short_name, tla, crest, fetched_at_utc)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO raw_teams (team_id, name, short_name, tla, crest, crest_url, fetched_at_utc)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(team_id) DO UPDATE SET
             name=excluded.name,
             short_name=excluded.short_name,
             tla=excluded.tla,
             crest=excluded.crest,
+            crest_url=excluded.crest_url,
             fetched_at_utc=excluded.fetched_at_utc;
     """, rows)
 
