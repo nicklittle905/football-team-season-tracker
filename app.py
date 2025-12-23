@@ -160,7 +160,28 @@ with status_col:
 st.divider()
 
 league_table = safe_query_df("select * from mart_league_table_current order by position")
-pos = safe_query_df("select * from mart_team_position_through_time order by matchday")
+pos = safe_query_df(
+    """
+    select
+      s.matchday,
+      s.as_of_date,
+      s.position,
+      s.points,
+      s.gd,
+      tm.result,
+      tm.goals_for,
+      tm.goals_against,
+      opp.team_name as opponent
+    from mart_team_position_through_time s
+    left join fct_team_match tm
+      on tm.matchday = s.matchday
+     and tm.team_id = ?
+    left join stg_raw_teams opp
+      on tm.opponent_team_id = opp.team_id
+    order by s.matchday
+    """,
+    [int(selected_team_id)],
+)
 last5 = safe_query_df("select * from mart_team_last_5 order by match_date desc")
 
 col1, col2 = st.columns([2, 1])
@@ -197,7 +218,17 @@ with col2:
                     scale=alt.Scale(reverse=True, domain=[1, teams_in_league]),
                     axis=alt.Axis(values=list(range(1, teams_in_league + 1))),
                 ),
-                tooltip=["matchday", "position", "points", "gd", "as_of_date"],
+                tooltip=[
+                    alt.Tooltip("matchday:Q", title="Matchday"),
+                    alt.Tooltip("position:Q", title="Position"),
+                    alt.Tooltip("points:Q", title="Points"),
+                    alt.Tooltip("gd:Q", title="GD"),
+                    alt.Tooltip("opponent:N", title="Opponent"),
+                    alt.Tooltip("result:N", title="Result"),
+                    alt.Tooltip("goals_for:Q", title="Goals For"),
+                    alt.Tooltip("goals_against:Q", title="Goals Against"),
+                    alt.Tooltip("as_of_date:T", title="As of"),
+                ],
             )
         )
         st.altair_chart(chart, use_container_width=True)
@@ -209,6 +240,20 @@ st.subheader(f"{selected_team_name} matches")
 if last5.empty:
     st.info("No matches found. Run refresh.")
 else:
+    # Form strip (last 5 results)
+    recent_form = last5.head(5)
+    form_colors = {"W": "#22c55e", "D": "#e2e8f0", "L": "#ef4444"}
+    form_text = {"W": "W", "D": "D", "L": "L"}
+    form_row = []
+    for _, r in recent_form.iterrows():
+        res = str(r.get("result"))
+        bg = form_colors.get(res, "#e2e8f0")
+        label = form_text.get(res, res)
+        form_row.append(
+            f'<span style="display:inline-block;padding:6px 10px;margin-right:6px;border-radius:8px;background:{bg};color:#0f172a;font-weight:600;">{label}</span>'
+        )
+    st.markdown("Form (last 5): " + "".join(form_row), unsafe_allow_html=True)
+
     st.dataframe(last5, use_container_width=True, hide_index=True)
 
 st.subheader("Match detail")
