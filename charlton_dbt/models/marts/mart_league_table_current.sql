@@ -10,6 +10,7 @@ with latest as (
 )
 
 select
+  s.team_id,
   s.position,
   t.team_name,
   s.played, s.won, s.drawn, s.lost,

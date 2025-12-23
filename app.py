@@ -202,6 +202,95 @@ with col1:
         styled_table = league_table.style.apply(highlight_team, axis=1)
         st.dataframe(styled_table, use_container_width=True, hide_index=True)
 
+    st.subheader("Next fixtures")
+
+    def team_form(team_id: int, n: int = 5) -> List[str]:
+        df = safe_query_df(
+            """
+            select result
+            from fct_team_match
+            where team_id = ?
+            order by match_date desc
+            limit ?
+            """,
+            [team_id, n],
+        )
+        return df["result"].tolist() if not df.empty else []
+
+    def form_badges(results: List[str]) -> str:
+        colors = {"W": "#22c55e", "D": "#e2e8f0", "L": "#ef4444"}
+        tags = []
+        for r in results:
+            bg = colors.get(r, "#e2e8f0")
+            tags.append(
+                f'<span style="display:inline-block;padding:4px 8px;margin-right:4px;border-radius:999px;background:{bg};color:#0f172a;font-weight:600;">{r}</span>'
+            )
+        return "".join(tags) if tags else '<span style="color:#94a3b8;">no form</span>'
+
+    fixtures = safe_query_df(
+        """
+        select
+          m.match_id,
+          m.matchday,
+          m.utc_date,
+          m.home_team_id,
+          m.away_team_id,
+          h.team_name as home_team,
+          a.team_name as away_team
+        from stg_raw_matches m
+        left join stg_raw_teams h on m.home_team_id = h.team_id
+        left join stg_raw_teams a on m.away_team_id = a.team_id
+        where m.status in ('SCHEDULED', 'TIMED')
+          and (m.home_team_id = ? or m.away_team_id = ?)
+        order by m.utc_date
+        limit 5
+        """,
+        [int(selected_team_id), int(selected_team_id)],
+    )
+
+    # Map team_id -> position for quick lookup
+    positions = {int(r["team_id"]): int(r["position"]) for _, r in league_table.iterrows()} if not league_table.empty else {}
+
+    def predict(home_id: Optional[int], away_id: Optional[int]) -> str:
+        hp, ap = positions.get(home_id), positions.get(away_id)
+        if hp is None or ap is None:
+            return "Draw"
+        if abs(hp - ap) <= 1:
+            return "Draw"
+        return "Home win" if hp < ap else "Away win"
+
+    if fixtures.empty:
+        st.info("No upcoming fixtures found.")
+    else:
+        for _, f in fixtures.iterrows():
+            home_form = form_badges(team_form(int(f.home_team_id))) if pd.notna(f.home_team_id) else ""
+            away_form = form_badges(team_form(int(f.away_team_id))) if pd.notna(f.away_team_id) else ""
+            prediction = predict(int(f.home_team_id) if pd.notna(f.home_team_id) else None, int(f.away_team_id) if pd.notna(f.away_team_id) else None)
+            kickoff = pd.to_datetime(f.utc_date).strftime("%Y-%m-%d %H:%M UTC") if pd.notna(f.utc_date) else "TBD"
+
+            st.markdown(
+                f"""
+                <div style="border:1px solid #e2e8f0;border-radius:12px;padding:12px 16px;margin-bottom:12px;background:#0b1120;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <span style="color:#cbd5e1;font-weight:600;">Matchday {int(f.matchday) if pd.notna(f.matchday) else '—'} · {kickoff}</span>
+                    <span style="background:#e0f2ff;color:#0f172a;padding:4px 10px;border-radius:999px;font-weight:700;">{prediction}</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:12px;">
+                    <div style="flex:1;text-align:right;">
+                      <div style="color:#e2e8f0;font-size:1.05rem;font-weight:700;">{f.home_team or 'TBD'}</div>
+                      <div style="margin-top:6px;">{home_form}</div>
+                    </div>
+                    <div style="width:60px;text-align:center;color:#cbd5e1;font-weight:600;">vs</div>
+                    <div style="flex:1;text-align:left;">
+                      <div style="color:#e2e8f0;font-size:1.05rem;font-weight:700;">{f.away_team or 'TBD'}</div>
+                      <div style="margin-top:6px;">{away_form}</div>
+                    </div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
 with col2:
     st.subheader(f"{selected_team_name} position through time")
     if not pos.empty:
