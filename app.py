@@ -87,16 +87,16 @@ def fetch_teams() -> List[Tuple[int, str]]:
     return []
 
 
-def form_chips(results: List[str]) -> str:
-    colors = {"W": "#22c55e", "D": "#e2e8f0", "L": "#ef4444"}
-    return "".join(
-        f'<span style="display:inline-block;padding:4px 10px;margin-right:6px;border-radius:999px;background:{colors.get(r, "#e2e8f0")};color:#0f172a;font-weight:700;">{r}</span>'
-        for r in results
-    )
-
-
 def render_empty(message: str) -> None:
     st.info(message + " Click Refresh to build data.")
+
+
+def table_form_badges(results: List[str]) -> str:
+    colors = {"W": "#22c55e", "D": "#e2e8f0", "L": "#ef4444"}
+    return "".join(
+        f'<span style="display:inline-block;padding:2px 8px;margin-right:4px;border-radius:999px;background:{colors.get(r, "#e2e8f0")};color:#0f172a;font-weight:700;font-size:0.8rem;">{r}</span>'
+        for r in results
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -178,7 +178,8 @@ pos_history = query_df(
       tm.result,
       tm.goals_for,
       tm.goals_against,
-      opp.team_name as opponent
+      opp.team_name as opponent,
+      opp.team_crest_url as opponent_crest_url
     from mart_team_position_through_time s
     left join fct_team_match tm
       on tm.matchday = s.matchday
@@ -190,20 +191,47 @@ pos_history = query_df(
     [int(selected_team_id)],
     cache_key(),
 )
-team_matches = query_df("select * from mart_team_last_5 order by match_date desc", None, cache_key())
+team_matches = query_df(
+    """
+    select
+      tm.match_id,
+      tm.match_date,
+      tm.matchday,
+      tm.is_home,
+      tm.opponent_team_id,
+      opp.team_name as opponent,
+      opp.team_crest_url as opponent_crest_url,
+      tm.goals_for,
+      tm.goals_against,
+      tm.result,
+      tm.points
+    from fct_team_match tm
+    left join stg_raw_teams opp on tm.opponent_team_id = opp.team_id
+    where tm.team_id = ?
+    order by tm.match_date desc
+    """,
+    [int(selected_team_id)],
+    cache_key(),
+)
 
 # -----------------------------------------------------------------------------
 # Header
 # -----------------------------------------------------------------------------
 header_col1, header_col2 = st.columns([5, 1])
 with header_col1:
-    row = st.columns([1, 6])
-    with row[0]:
-        if selected_team_crest_url:
-            st.image(selected_team_crest_url, width=56)
-    with row[1]:
-        st.markdown(f"<div style='color:#94a3b8;font-size:0.9rem;'>{COMP_CODE} · {SEASON}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div style='font-size:2rem;font-weight:800;'>{selected_team_name}</div>", unsafe_allow_html=True)
+    crest_html = f'<img src="{selected_team_crest_url}" width="72" style="display:block;" />' if selected_team_crest_url else ""
+    st.markdown(
+        f"""
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div>{crest_html}</div>
+          <div style="display:flex;flex-direction:column;gap:2px;">
+            <div style="color:#94a3b8;font-size:0.9rem;">{COMP_CODE} · {SEASON}</div>
+            <div style="font-size:2rem;font-weight:800;line-height:1.1;">{selected_team_name}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 with header_col2:
     st.caption(f"Team ID: {selected_team_id}")
 
@@ -228,10 +256,10 @@ with tab_overview:
         played = int(lp.matchday) if not pd.isna(lp.matchday) else None
         ppg = (lp.points / played) if played and played > 0 else None
         metrics = [
-            ("Position", lp.position),
-            ("Points", lp.points),
-            ("GD", lp.gd),
-            ("Played", played),
+            ("Position", int(lp.position) if not pd.isna(lp.position) else "–"),
+            ("Points", int(lp.points) if not pd.isna(lp.points) else "–"),
+            ("GD", int(lp.gd) if not pd.isna(lp.gd) else "–"),
+            ("Played", played if played is not None else "–"),
             ("PPG", f"{ppg:.2f}" if ppg is not None else "–"),
         ]
     elif not league_table.empty:
@@ -239,10 +267,10 @@ with tab_overview:
         if not row.empty:
             r = row.iloc[0]
             metrics = [
-                ("Position", r.position),
-                ("Points", r.points),
-                ("GD", r.gd),
-                ("Played", r.played),
+                ("Position", int(r.position) if not pd.isna(r.position) else "–"),
+                ("Points", int(r.points) if not pd.isna(r.points) else "–"),
+                ("GD", int(r.gd) if not pd.isna(r.gd) else "–"),
+                ("Played", int(r.played) if not pd.isna(r.played) else "–"),
                 ("PPG", f"{r.points / r.played:.2f}" if r.played else "–"),
             ]
         else:
@@ -253,34 +281,79 @@ with tab_overview:
     for col, (label, value) in zip(kpi_cols, metrics or []):
         col.metric(label, value)
 
-    st.markdown("#### Form")
-    if team_matches.empty:
-        render_empty("No matches yet for this team.")
-    else:
-        recent = team_matches.head(5)
-        st.markdown(form_chips(recent["result"].tolist()), unsafe_allow_html=True)
-        st.dataframe(
-            recent[["match_date", "matchday", "home_away", "opponent", "goals_for", "goals_against", "result"]],
-            hide_index=True,
-            use_container_width=True,
-        )
+    form_col, chart_col = st.columns([1, 1])
 
-    st.markdown("#### Position through time")
-    if pos_history.empty:
-        render_empty("Position data not available.")
-    else:
-        teams_in_league = len(league_table) if not league_table.empty else int(pos_history["position"].max())
-        teams_in_league = max(teams_in_league, int(pos_history["position"].max()))
-        color_scale = alt.Scale(domain=["W", "D", "L"], range=["#22c55e", "#e2e8f0", "#ef4444"])
-        base = alt.Chart(pos_history).encode(
-            x=alt.X("matchday:Q", title="Matchday"),
-            y=alt.Y(
-                "position:Q",
-                title="Position",
-                scale=alt.Scale(reverse=True, domain=[1, teams_in_league]),
-                axis=alt.Axis(values=list(range(1, teams_in_league + 1))),
-            ),
-            tooltip=[
+    with form_col:
+        st.markdown("#### Form")
+        if team_matches.empty:
+            render_empty("No matches yet for this team.")
+        else:
+            recent = team_matches.head(5)
+            chips = []
+            color_map = {"W": "#22c55e", "D": "#e2e8f0", "L": "#ef4444"}
+            for _, r in recent.iterrows():
+                res = str(r.get("result", ""))
+                bg = color_map.get(res, "#e2e8f0")
+                score = (
+                    f"{int(r.goals_for)}-{int(r.goals_against)}"
+                    if pd.notna(r.goals_for) and pd.notna(r.goals_against)
+                    else "—"
+                )
+                crest = r.get("opponent_crest_url")
+                crest_img = (
+                    f"<img src='{crest}' style='height:28px;width:28px;vertical-align:middle;border-radius:6px;' />"
+                    if crest
+                    else ""
+                )
+                chips.append(
+                    f"<div style='display:inline-flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 12px;margin-right:6px;border-radius:12px;background:{bg};color:#0f172a;font-weight:700;min-width:60px;box-shadow:0 1px 2px rgba(0,0,0,0.08);'>"
+                    f"<div style='display:flex;align-items:center;justify-content:space-between;width:100%;gap:6px;'>"
+                    f"<div style='flex:0 0 65%;display:flex;align-items:center;justify-content:center;'>{crest_img}</div>"
+                    f"<div style='flex:0 0 35%;text-align:center;font-weight:700;'>{res}</div>"
+                    f"</div>"
+                    f"<div style='font-weight:600;color:#0f172a;margin-top:4px;text-align:center;'>{score}</div>"
+                    f"</div>"
+                )
+            st.markdown("".join(chips), unsafe_allow_html=True)
+
+    with chart_col:
+        st.markdown("#### Position through time")
+        if pos_history.empty:
+            render_empty("Position data not available.")
+        else:
+            teams_in_league = len(league_table) if not league_table.empty else int(pos_history["position"].max())
+            teams_in_league = max(teams_in_league, int(pos_history["position"].max()))
+            color_scale = alt.Scale(domain=["W", "D", "L"], range=["#22c55e", "#e2e8f0", "#ef4444"])
+            max_md = int(pos_history["matchday"].max()) if not pos_history.empty else 46
+            bands = pd.DataFrame(
+                [
+                    {"y0": 1, "y1": 3, "color": "#16a34a"},    # promotion (1-3)
+                    {"y0": 3, "y1": 7, "color": "#86efac"},    # playoffs (3-7)
+                    {"y0": 7, "y1": 22, "color": "#e5e7eb"},   # nothing (7-22)
+                    {"y0": 22, "y1": 24, "color": "#f87171"},  # relegation (22-24)
+                ]
+            )
+            bands["x0"] = 0
+            bands["x1"] = max_md + 1
+            band_layer = alt.Chart(bands).mark_rect(opacity=0.6).encode(
+                x=alt.X("x0:Q", title=None, scale=alt.Scale(domain=[0, max_md + 1]), axis=alt.Axis(labels=False, ticks=False)),
+                x2="x1:Q",
+                y="y0:Q",
+                y2="y1:Q",
+                color=alt.Color("color:N", scale=None, legend=None),
+                tooltip=[],
+            )
+
+            base = alt.Chart(pos_history).encode(
+                x=alt.X("matchday:Q", title="Matchday", scale=alt.Scale(domain=[1, max_md])),
+                y=alt.Y(
+                    "position:Q",
+                    title="Position",
+                    scale=alt.Scale(reverse=True, domain=[1, teams_in_league], nice=False, padding=0),
+                    axis=alt.Axis(values=list(range(1, teams_in_league + 1))),
+                ),
+            )
+            tooltip_fields = [
                 alt.Tooltip("matchday:Q", title="Matchday"),
                 alt.Tooltip("position:Q", title="Position"),
                 alt.Tooltip("points:Q", title="Points"),
@@ -290,24 +363,37 @@ with tab_overview:
                 alt.Tooltip("goals_for:Q", title="Goals For"),
                 alt.Tooltip("goals_against:Q", title="Goals Against"),
                 alt.Tooltip("as_of_date:T", title="As of"),
-            ],
-        )
-        chart = base.mark_line(color="#cbd5e1", strokeWidth=3) + base.mark_point(
-            filled=True, size=140, strokeWidth=0
-        ).encode(color=alt.Color("result:N", title="Result", scale=color_scale, legend=None))
-        st.altair_chart(chart, use_container_width=True)
-        st.caption("Lower is better (1st at the top).")
+            ]
+            grid_layer = (
+                alt.Chart(pd.DataFrame({"y": list(range(1, teams_in_league + 1))}))
+                .mark_rule(color="#cbd5e1", opacity=0.6)
+                .encode(y="y:Q", tooltip=[])
+            )
+
+            chart = (
+                band_layer
+                + grid_layer
+                + base.mark_line(color="#000000", strokeWidth=3).encode(tooltip=[])
+                + base.mark_point(filled=True, size=140, opacity=1).encode(
+                    color=alt.Color("result:N", title="Result", scale=color_scale, legend=None),
+                    tooltip=tooltip_fields,
+                )
+            )
+            st.altair_chart(chart, use_container_width=True)
+            st.caption("Lower is better (1st at the top).")
 
 # Matches tab
 with tab_matches:
     if team_matches.empty:
         render_empty("No matches yet for this team.")
     else:
+        matches_display = team_matches.copy()
+        matches_display["home_away"] = matches_display["is_home"].apply(lambda x: "H" if pd.notna(x) and int(x) == 1 else "A")
         q = st.text_input("Search opponent or matchday").lower().strip()
-        filtered = team_matches
+        filtered = matches_display
         if q:
             filtered = filtered[
-                filtered["opponent"].str.lower().str.contains(q) | filtered["matchday"].astype(str).str.contains(q)
+                filtered["opponent"].fillna("").str.lower().str.contains(q) | filtered["matchday"].astype(str).str.contains(q)
             ]
         st.dataframe(
             filtered[
@@ -388,7 +474,7 @@ with tab_table:
 
         table_display = league_table.copy()
         table_display["Form"] = table_display["team_id"].apply(
-            lambda tid: form_chips(form_map.get(int(tid), [])) if pd.notna(tid) else ""
+            lambda tid: table_form_badges(form_map.get(int(tid), [])) if pd.notna(tid) else ""
         )
         st.dataframe(
             table_display[
