@@ -1,4 +1,4 @@
-# Charlton Season Tracker
+# Football Team Season Tracker
 
 End-to-end pipeline for football-data.org → DuckDB → dbt → Streamlit. Ingests full competition data (teams/matches), builds standings/marts, and renders a FotMob-inspired dashboard with team selection, logos, and per-team views.
 
@@ -6,7 +6,7 @@ End-to-end pipeline for football-data.org → DuckDB → dbt → Streamlit. Inge
 - Ingest teams/matches (with crest URLs) for a competition/season into DuckDB.
 - dbt transforms: standings per matchday, latest league table, per-team match facts.
 - Streamlit dashboard:
-  - Sidebar: competition/season, team selector (radio), refresh pipeline, debug toggle.
+  - Sidebar: competition/season, league table picker (click any row to select a team), refresh pipeline (enabled after selection), debug toggle.
   - Overview: KPIs, form tiles (all matches), position-through-time chart with promotion/playoff/relegation bands.
   - Matches: searchable match list + match detail card.
   - Table: full league table with form column and selected team highlight.
@@ -33,8 +33,7 @@ Copy `.env.example` to `.env` and set:
 FOOTBALL_DATA_TOKEN=your_token
 COMP_CODE=ELC
 SEASON=2025
-TEAM_NAME=Charlton Athletic FC
-DUCKDB_PATH=warehouse/charlton.duckdb
+DUCKDB_PATH=warehouse/season_tracker.duckdb  # set to the DB you want all components to share
 ```
 
 ## Ingest raw data
@@ -71,9 +70,9 @@ From repo root (after ingest + dbt):
 ```bash
 streamlit run app.py
 ```
-Use the sidebar to pick a team and click “Refresh pipeline” as needed. If you toggle “Debug,” the app will print query diagnostics to help trace issues.
+The dashboard loads after you select a team by clicking any row in the sidebar league table; the Refresh button stays disabled until a team is selected. Toggle “Debug” to print query diagnostics.
 
 ## Troubleshooting
-- **Missing/invalid DB file**: delete/move `warehouse/charlton.duckdb` and re-run ingest.
+- **Missing/invalid DB file**: delete/move the DuckDB file you configured (e.g., `warehouse/season_tracker.duckdb`) and re-run ingest.
 - **Empty charts**: toggle “Debug” to inspect the data feeding the charts; ensure ingest + dbt ran after selecting your team (via the sidebar refresh).
 - **API issues/rate limits**: ingest surfaces HTTP errors; verify your football-data.org plan/limits.
